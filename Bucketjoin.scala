@@ -1,15 +1,12 @@
-package com.periscope.price.client2.etl.loader
+package joinExperiments
 
 import java.util.concurrent.TimeUnit
 
-import com.periscope.price.client2.etl.builder.SparkSessionBuilder
-import com.periscope.price.client2.etl.common.ArgumentChecker
-import org.apache.spark.sql.{DataFrame, Row, SparkSession}
+import org.apache.spark.SparkConf
 import org.apache.spark.sql.types.{IntegerType, StructField, StructType}
+import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
-import scala.util.{Success, Try}
-
-object Bucketjoin extends ArgumentChecker with Serializable {
+object Bucketjoin extends Serializable {
 
   def time[R](block: => R): R = {
     val t0 = System.nanoTime()
@@ -24,14 +21,8 @@ object Bucketjoin extends ArgumentChecker with Serializable {
 
 
   def main(args: Array[String]): Unit = {
-//    val arguments = args ++ Array("true") // bucket and then join
-    val arguments = args // normal join
-    val shouldBucket = Try(arguments(0)) match {
-      case Success(a) if a != "" => a.toBoolean
-      case _ => false
-    }
 
-    process(args,shouldBucket)
+    process(args,true)
   }
 
   def createDataFrames(spark: SparkSession, numberOfDataFrames: Int) = {
@@ -47,8 +38,26 @@ object Bucketjoin extends ArgumentChecker with Serializable {
     })
   }
 
+  def buildSession(masterUrl: String, appName: String) = {
+    val conf = new SparkConf()
+    conf.set("spark.dynamicAllocation.enabled", "true")
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+
+    // Stop creating summary metadata after parquet file is written
+    conf.set("parquet.enable.summary-metadata", "false")
+
+    val spark =
+      SparkSession.builder().master(masterUrl).appName(appName).config(conf).getOrCreate()
+
+    // Use better appending output writer for parquet file to S3 algorithm
+    // https://docs.databricks.com/spark/latest/faq/append-slow-with-spark-2.0.0.html
+    spark.sparkContext.hadoopConfiguration
+      .set("mapreduce.fileoutputcommitter.algorithm.version", "2")
+    spark
+  }
+
   def process(arguments: Array[String],shouldBucket: Boolean) = {
-    val spark: SparkSession = SparkSessionBuilder.getSession("local[*]", "Bucketing test")
+    val spark: SparkSession = buildSession("local[*]", "Bucketing test")
     if(shouldBucket) bucketAndJoin(spark,createDataFrames(spark,4): _*)  else normalJoin(spark,createDataFrames(spark,4): _*)
   }
 
